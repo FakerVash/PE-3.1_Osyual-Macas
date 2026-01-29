@@ -11,6 +11,9 @@ const pool = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
 
 async function testConnection() {
@@ -22,6 +25,5 @@ async function testConnection() {
         console.error("Database connection failed:", error);
     }
 }
-
 
 export { pool, testConnection };

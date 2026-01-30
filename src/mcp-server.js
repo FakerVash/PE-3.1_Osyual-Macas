@@ -6,62 +6,71 @@ import mysql from "mysql2/promise";
 import dotenv from "dotenv";
 dotenv.config();
 
+// Configuración de la base de datos MCP
 const DB_CONFIG = {
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER_MCP || 'mcp_agent',
-    password: process.env.DB_PASSWORD_MCP,
-    database: process.env.DB_NAME
+    host: process.env.DB_HOST || 'localhost',
+    user: 'mcp_agent',
+    password: 'Agent_Secret_Pass_123!',
+    database: process.env.DB_NAME || 'pe31_rls',
+    ssl: {
+        rejectUnauthorized: false
+    }
 };
 
-const server = new Server(
-    {
-        name: "MCP Server",
-        version: "1.0.0",
-    },
-    { capabilities: { tools: {} } }
-);
+const server = new Server({
+    name: "MCP Server",
+    version: "1.0.0",
+    description: "MCP Server",
+},
+    { capabilities: { tools: {} } })
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+// Definir lo que la IA puede hacer (funcionalidades)
+server.setRequestHandler(ListToolsRequestSchema, async (request) => {
     return {
         tools: [
             {
                 name: "db_readonly",
-                description: "Consulta segura de información financiera",
+                description: "Consulta segura de información financiera. SOlo permite leer balance y sus transacciones",
                 inputSchema: {
                     type: "object",
                     properties: {
                         query_type: {
                             type: "string",
                             enum: ["balance", "get_last_transactions"],
-                            description: "Tipo de consulta"
+                            description: "Tipo de consulta: 'balance' o 'get_last_transactions'"
                         },
                         account_id: {
                             type: "integer",
-                            description: "ID del usuario"
+                            description: "ID de la cuenta para la cual se realiza la consulta"
                         }
                     },
                     required: ["query_type", "account_id"]
                 }
             }
         ]
-    };
-});
-
-const InputSchema = z.object({
-    query_type: z.enum(["balance", "get_last_transactions"]),
-    account_id: z.number().int().positive()
-});
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    if (request.params.name !== 'db_readonly') {
-        throw new Error("Tool not found");
     }
+})
+
+
+//Ejecutar las herramientas
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name !== 'db_readonly') throw new Error("Tool not found");
+
+    // Validación Estricta - Crear la regla de validación
+    const inputSchema = z.object({
+        query_type: z.enum(["balance", "get_last_transactions"]),
+        account_id: z.number().int().positive()
+    })
 
     try {
-        const { query_type, account_id } = InputSchema.parse(request.params.arguments);
+        // Validación Estricta - Validar la entrada
+        const { query_type, account_id } = inputSchema.parse(request.params.arguments);
+
         const connection = await mysql.createConnection(DB_CONFIG);
 
         try {
+            //Establecer identididad
+            //Antes de cualquier consulta le decimos a la BD "Quienes somos"
             await connection.execute(
                 "SET @app_current_user_id = ?",
                 [account_id]
@@ -69,11 +78,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             let result;
             if (query_type === "balance") {
-                const [rows] = await connection.execute(
+                const [row] = await connection.execute(
                     "SELECT SUM(amount) as total_balance FROM financial_records_secure"
                 );
-                result = rows[0].total_balance || 0;
-            } else {
+                result = row[0].total_balance || 0;
+            } else if (query_type === "get_last_transactions") {
                 const [rows] = await connection.execute(
                     "SELECT * FROM financial_records_secure ORDER BY created_at DESC LIMIT 5"
                 );
@@ -84,21 +93,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 content: [{
                     type: "text",
                     text: JSON.stringify(result, null, 2)
-                }]
-            };
+                }
+                ]
+            }
         } finally {
-            await connection.end();
+            connection.end();
         }
     } catch (error) {
         return {
             content: [{
                 type: "text",
-                text: `Error: ${error.message}`
-            }],
-            isError: true
-        };
+                text: `Error al ejecutar la herramienta: ${error.message}`,
+                isError: true
+            }
+            ]
+        }
     }
-});
+})
 
 async function main() {
     const transport = new StdioServerTransport();
